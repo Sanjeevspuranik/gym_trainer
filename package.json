@@ -1,0 +1,40 @@
+{
+  "name": "gym-trainer",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/session-isolation.test.ts tests/session-export.test.ts",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:import:sqlite": "tsx scripts/import-sqlite.ts",
+    "audit:prod": "npm audit --omit=dev"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "next": "16.4.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.15",
+    "@next/env": "^16.4.5",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "better-sqlite3": "^13.0.3",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.4.5",
+    "pg": "^8.23.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
