@@ -42,8 +42,8 @@ node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'
 
 Use the first generated value for `AUTH_RATE_LIMIT_SECRET` and generate a
 separate value for `CRON_SECRET`. Put your development database's pooled
-PostgreSQL connection string in `DATABASE_URL`. Keep `.env.local` private; it is
-ignored by Git.
+PostgreSQL connection string in `DATABASE_URL` and its direct connection string
+in `DATABASE_URL_UNPOOLED`. Keep `.env.local` private; it is ignored by Git.
 
 Install dependencies, apply the schema, and start Next.js:
 
@@ -71,17 +71,20 @@ local SQLite database automatically.
    | Variable | Required | Purpose |
    | --- | --- | --- |
    | `DATABASE_URL` | Yes | Pooled PostgreSQL connection URL |
+   | `DATABASE_URL_UNPOOLED` | For migrations/imports | Direct PostgreSQL connection URL |
    | `AUTH_RATE_LIMIT_SECRET` | Yes | HMAC key for privacy-preserving rate-limit identifiers; at least 32 characters |
    | `CRON_SECRET` | Yes | Secret used to authorize the scheduled cleanup endpoint; at least 32 characters |
 
    Do not prefix secrets with `NEXT_PUBLIC_`.
 4. Apply migrations to the Preview and Production databases from a trusted
-   shell, using the matching connection string. Migrations are deliberately not
-   run during the Vercel build.
+   shell, using the matching direct/unpooled connection string. The application
+   uses Neon HTTP with pooled `DATABASE_URL`; migrations use the direct URL for
+   advisory locks. Migrations are deliberately not run during the Vercel build.
 
    ```powershell
-   $env:DATABASE_URL = "<the matching Neon pooled connection string>"
+   $env:DATABASE_URL_UNPOOLED = "<the matching Neon direct connection string>"
    npm run db:migrate
+   Remove-Item Env:DATABASE_URL_UNPOOLED
    ```
 5. If you want to carry over the local SQLite accounts and workouts, follow the
    [data migration](#migrate-existing-sqlite-data) instructions before inviting
@@ -105,12 +108,13 @@ deployed hostname; migrated users should sign in again.
 
 Back up the source database first. Do not copy only the SQLite main file while
 its WAL sidecar may contain recent writes. Run the importer from the project
-root with `DATABASE_URL` pointing to the **empty** target database:
+root with `DATABASE_URL_UNPOOLED` pointing to the **empty** target database:
 
 ```powershell
-$env:DATABASE_URL = "<the target Neon pooled connection string>"
+$env:DATABASE_URL_UNPOOLED = "<the target Neon direct connection string>"
 npm run db:migrate
 npm run db:import:sqlite -- --confirm
+Remove-Item Env:DATABASE_URL_UNPOOLED
 ```
 
 To select a different source:
@@ -128,6 +132,7 @@ PBKDF2 credential hashes, so users can keep their passphrases.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `DATABASE_URL` | None | PostgreSQL connection URL; required at runtime |
+| `DATABASE_URL_UNPOOLED` | None | Direct PostgreSQL URL used by migration/import scripts |
 | `AUTH_RATE_LIMIT_SECRET` | None | HMAC secret for rate-limit buckets; required for registration and login |
 | `CRON_SECRET` | None | Bearer secret for the scheduled cleanup route |
 | `GYM_TRAINER_SQLITE_SOURCE` | `data/gym_trainer.sqlite3` | Default source for the one-time SQLite importer |
@@ -149,7 +154,7 @@ event names and error codes, not passwords, session tokens, or database URLs.
 - [`src/lib/auth.ts`](./src/lib/auth.ts) hashes passphrases with PBKDF2, issues
   opaque random cookies, and stores only a hash of each cookie token.
 - [`src/lib/database.ts`](./src/lib/database.ts) validates `DATABASE_URL` and
-  reuses a small Neon serverless connection pool per warm function instance.
+  uses Neon's stateless HTTP driver for serverless application queries.
 - [`src/lib/session-store.ts`](./src/lib/session-store.ts) uses parameterized
   PostgreSQL queries and enforces owner-scoped reads and writes.
 - [`src/lib/rate-limit.ts`](./src/lib/rate-limit.ts) stores HMAC-hashed auth

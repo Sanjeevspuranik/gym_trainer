@@ -1,6 +1,16 @@
-import { Pool } from "@neondatabase/serverless";
+import { neon } from "@neondatabase/serverless";
 
-export type PgQueryable = Pick<Pool, "query">;
+export type PgQueryResult<Row> = {
+  rows: Row[];
+  rowCount: number | null;
+};
+
+export type PgQueryable = {
+  query<Row extends Record<string, unknown> = Record<string, unknown>>(
+    queryText: string,
+    values?: unknown[],
+  ): Promise<PgQueryResult<Row>>;
+};
 
 export type PgClient = PgQueryable & {
   release(error?: Error | boolean): void;
@@ -8,59 +18,70 @@ export type PgClient = PgQueryable & {
 
 export type PgPool = PgQueryable & {
   connect(): Promise<PgClient>;
+  end(): Promise<void>;
 };
 
 type DatabaseCache = typeof globalThis & {
-  __gymTrainerPool?: Pool;
-  __gymTrainerDatabaseUrl?: string;
+  __gymTrainerHttpDatabase?: PgQueryable;
+  __gymTrainerHttpDatabaseUrl?: string;
 };
 
 const globalDatabase = globalThis as DatabaseCache;
 
-export function getDatabaseUrl(): string {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required to connect to PostgreSQL.");
+function validateDatabaseUrl(
+  value: string | undefined,
+  variableName: string,
+): string {
+  if (!value) {
+    throw new Error(`${variableName} is required to connect to PostgreSQL.`);
   }
 
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(databaseUrl);
+    parsedUrl = new URL(value);
   } catch {
-    throw new Error("DATABASE_URL must be a valid PostgreSQL connection URL.");
+    throw new Error(`${variableName} must be a valid PostgreSQL connection URL.`);
   }
   if (parsedUrl.protocol !== "postgres:" && parsedUrl.protocol !== "postgresql:") {
-    throw new Error("DATABASE_URL must use the postgres or postgresql protocol.");
+    throw new Error(`${variableName} must use the postgres or postgresql protocol.`);
   }
-  return databaseUrl;
+  return value;
 }
 
-export function getDatabase(): Pool {
+export function getDatabaseUrl(): string {
+  return validateDatabaseUrl(process.env.DATABASE_URL, "DATABASE_URL");
+}
+
+export function getMigrationDatabaseUrl(): string {
+  return validateDatabaseUrl(
+    process.env.DATABASE_URL_UNPOOLED ?? process.env.DATABASE_URL,
+    "DATABASE_URL_UNPOOLED or DATABASE_URL",
+  );
+}
+
+export function getDatabase(): PgQueryable {
   const databaseUrl = getDatabaseUrl();
   if (
-    globalDatabase.__gymTrainerPool &&
-    globalDatabase.__gymTrainerDatabaseUrl === databaseUrl
+    globalDatabase.__gymTrainerHttpDatabase &&
+    globalDatabase.__gymTrainerHttpDatabaseUrl === databaseUrl
   ) {
-    return globalDatabase.__gymTrainerPool;
+    return globalDatabase.__gymTrainerHttpDatabase;
   }
 
-  const pool = new Pool({
-    connectionString: databaseUrl,
-    max: 1,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 5_000,
-    allowExitOnIdle: true,
-  });
-  pool.on("error", (error: Error) => {
-    console.error(
-      JSON.stringify({
-        event: "database_pool_error",
-        errorName: error.name,
-      }),
-    );
-  });
-
-  globalDatabase.__gymTrainerPool = pool;
-  globalDatabase.__gymTrainerDatabaseUrl = databaseUrl;
-  return pool;
+  const sql = neon(databaseUrl, { fullResults: true });
+  const database: PgQueryable = {
+    async query<Row extends Record<string, unknown>>(
+      queryText: string,
+      values?: unknown[],
+    ): Promise<PgQueryResult<Row>> {
+      const result = await sql.query(queryText, values);
+      return {
+        rows: result.rows as Row[],
+        rowCount: result.rowCount,
+      };
+    },
+  };
+  globalDatabase.__gymTrainerHttpDatabase = database;
+  globalDatabase.__gymTrainerHttpDatabaseUrl = databaseUrl;
+  return database;
 }

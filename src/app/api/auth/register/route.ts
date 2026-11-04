@@ -1,4 +1,8 @@
-import { createSessionToken, hashPassword, setSessionCookie } from "@/lib/auth";
+import {
+  generateSessionToken,
+  hashPassword,
+  setSessionCookie,
+} from "@/lib/auth";
 import { getDatabase } from "@/lib/database";
 import {
   apiError,
@@ -9,6 +13,7 @@ import {
 } from "@/lib/http";
 import { AUTH_RATE_LIMITS, checkAuthRateLimit } from "@/lib/rate-limit";
 import { isValidRegistrationPassword, normalizeUsername } from "@/lib/validation";
+import { createUserWithSession } from "@/lib/auth-store";
 import type { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
@@ -50,33 +55,20 @@ export async function POST(request: NextRequest) {
     }
 
     const credentials = await hashPassword(password);
+    const session = generateSessionToken();
     const database = getDatabase();
-    const client = await database.connect();
     try {
-      await client.query("BEGIN");
-      const result = await client.query<{ id: number; username: string }>(
-        `INSERT INTO users (username, password_salt, password_hash, created_at)
-         VALUES ($1, $2, $3, NOW())
-         RETURNING id, username`,
-        [username, credentials.salt, credentials.hash],
-      );
-      const user = result.rows[0];
-      if (!user) {
-        throw new Error("The new account could not be loaded.");
-      }
+      const user = await createUserWithSession(database, {
+        username,
+        passwordSalt: credentials.salt,
+        passwordHash: credentials.hash,
+        tokenHash: session.tokenHash,
+        expiresAt: session.expiresAt,
+      });
 
-      const token = await createSessionToken(client, user.id);
-      await client.query("COMMIT");
       const response = apiJson({ user }, 201);
-      return setSessionCookie(response, token);
+      return setSessionCookie(response, session.token);
     } catch (error) {
-      try {
-        await client.query("ROLLBACK");
-      } catch {
-        console.error(
-          JSON.stringify({ event: "auth_register_rollback_failed" }),
-        );
-      }
       if (
         typeof error === "object" &&
         error !== null &&
@@ -86,8 +78,6 @@ export async function POST(request: NextRequest) {
         return apiError("That username is already in use.", 409);
       }
       throw error;
-    } finally {
-      client.release();
     }
   });
 }

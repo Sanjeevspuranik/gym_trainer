@@ -69,23 +69,32 @@ export async function verifyPassword(
   );
 }
 
+export type GeneratedSessionToken = {
+  token: string;
+  tokenHash: string;
+  expiresAt: number;
+};
+
+export function generateSessionToken(): GeneratedSessionToken {
+  const token = randomBytes(32).toString("base64url");
+  return {
+    token,
+    tokenHash: createHash("sha256").update(token).digest("hex"),
+    expiresAt: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
+  };
+}
+
 export async function createSessionToken(
   database: PgQueryable,
   userId: number,
 ): Promise<string> {
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = createHash("sha256").update(token).digest("hex");
-  const now = Math.floor(Date.now() / 1000);
-  await database.query(
-    "DELETE FROM auth_sessions WHERE expires_at <= $1",
-    [now],
-  );
+  const session = generateSessionToken();
   await database.query(
     `INSERT INTO auth_sessions (token_hash, user_id, expires_at, created_at)
      VALUES ($1, $2, $3, NOW())`,
-    [tokenHash, userId, now + SESSION_TTL_SECONDS],
+    [session.tokenHash, userId, session.expiresAt],
   );
-  return token;
+  return session.token;
 }
 
 export async function getCurrentUser(): Promise<PublicUser | null> {

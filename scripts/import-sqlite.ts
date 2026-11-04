@@ -1,6 +1,7 @@
 import { loadEnvConfig } from "@next/env";
+import { Pool } from "@neondatabase/serverless";
 import { resolve } from "node:path";
-import { getDatabase } from "../src/lib/database";
+import { getMigrationDatabaseUrl } from "../src/lib/database";
 import { importSqliteDatabase } from "./sqlite-importer";
 
 loadEnvConfig(process.cwd());
@@ -27,7 +28,12 @@ async function main(): Promise<void> {
   }
 
   const sourcePath = sourcePathFromArguments();
-  const database = getDatabase();
+  const database = new Pool({
+    connectionString: getMigrationDatabaseUrl(),
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+    allowExitOnIdle: true,
+  });
   try {
     const counts = await importSqliteDatabase(sourcePath, database);
     console.log(

@@ -11,6 +11,8 @@ export type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
+export const USERNAME_HTML_PATTERN = "(?:[A-Za-z0-9_]|-){3,32}";
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

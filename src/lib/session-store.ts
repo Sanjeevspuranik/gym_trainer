@@ -1,4 +1,4 @@
-import type { PgClient, PgPool } from "./database";
+import type { PgQueryable } from "./database";
 import type { WorkoutSession } from "./types";
 import type { WorkoutSessionInput } from "./validation";
 
@@ -18,6 +18,14 @@ type ExerciseRow = {
   reps: number;
   weight_kg: string | number;
   sort_order: number;
+};
+
+type CreatedSessionRow = SessionRow & {
+  exercise_name: string | null;
+  exercise_sets: number | null;
+  exercise_reps: number | null;
+  exercise_weight_kg: string | number | null;
+  exercise_sort_order: number | null;
 };
 
 function toIsoString(value: string | Date | null): string | null {
@@ -52,7 +60,7 @@ function serializeSession(
 }
 
 async function getUserSession(
-  database: PgClient,
+  database: PgQueryable,
   userId: number,
   sessionId: number,
 ): Promise<WorkoutSession | null> {
@@ -78,7 +86,7 @@ async function getUserSession(
 }
 
 export async function listUserSessions(
-  database: PgPool,
+  database: PgQueryable,
   userId: number,
 ): Promise<WorkoutSession[]> {
   const sessionsResult = await database.query<SessionRow>(
@@ -113,90 +121,97 @@ export async function listUserSessions(
   }
 
   return sessionsResult.rows.map((session) =>
-    serializeSession(
-      session,
-      exercisesBySession.get(session.id) ?? [],
-    ),
+    serializeSession(session, exercisesBySession.get(session.id) ?? []),
   );
 }
 
 export async function createUserSession(
-  database: PgPool,
+  database: PgQueryable,
   userId: number,
   input: WorkoutSessionInput,
 ): Promise<WorkoutSession> {
-  const client = await database.connect();
-  try {
-    await client.query("BEGIN");
-    const sessionResult = await client.query<SessionRow>(
-      `INSERT INTO workout_sessions
+  const result = await database.query<CreatedSessionRow>(
+    `WITH new_session AS (
+       INSERT INTO workout_sessions
          (user_id, title, session_date, notes, created_at)
        VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, title, session_date, notes, completed_at, created_at`,
-      [
-        userId,
-        input.title,
-        input.date,
-        input.notes,
-        new Date().toISOString(),
-      ],
-    );
-    const session = sessionResult.rows[0];
-    if (!session) {
-      throw new Error("The new workout session could not be created.");
-    }
-
-    if (input.exercises.length > 0) {
-      const values: unknown[] = [];
-      const rows = input.exercises.map((exercise, index) => {
-        const parameter = index * 6;
-        values.push(
-          session.id,
-          exercise.name,
-          exercise.sets,
-          exercise.reps,
-          exercise.weightKg,
-          index,
-        );
-        return `($${parameter + 1}, $${parameter + 2}, $${parameter + 3}, ` +
-          `$${parameter + 4}, $${parameter + 5}, $${parameter + 6})`;
-      });
-      await client.query(
-        `INSERT INTO session_exercises
-           (session_id, name, sets, reps, weight_kg, sort_order)
-         VALUES ${rows.join(", ")}`,
-        values,
-      );
-    }
-
-    const workout = await getUserSession(client, userId, session.id);
-    if (!workout) {
-      throw new Error("The new workout session could not be loaded.");
-    }
-    await client.query("COMMIT");
-    return workout;
-  } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      console.error(
-        JSON.stringify({
-          event: "workout_create_rollback_failed",
-          errorName:
-            rollbackError instanceof Error
-              ? rollbackError.name
-              : "UnknownError",
-        }),
-      );
-    }
-    throw error;
-  } finally {
-    client.release();
+       RETURNING id, title, session_date, notes, completed_at, created_at
+     ),
+     new_exercises AS (
+       INSERT INTO session_exercises
+         (session_id, name, sets, reps, weight_kg, sort_order)
+       SELECT new_session.id, exercise.name, exercise.sets, exercise.reps,
+              exercise.weight_kg, exercise.sort_order
+       FROM new_session
+       CROSS JOIN jsonb_to_recordset($6::jsonb) AS exercise(
+         name TEXT,
+         sets INTEGER,
+         reps INTEGER,
+         weight_kg NUMERIC,
+         sort_order INTEGER
+       )
+       RETURNING session_id, name, sets, reps, weight_kg, sort_order
+     )
+     SELECT new_session.id, new_session.title, new_session.session_date,
+            new_session.notes, new_session.completed_at, new_session.created_at,
+            new_exercises.name AS exercise_name,
+            new_exercises.sets AS exercise_sets,
+            new_exercises.reps AS exercise_reps,
+            new_exercises.weight_kg AS exercise_weight_kg,
+            new_exercises.sort_order AS exercise_sort_order
+     FROM new_session
+     LEFT JOIN new_exercises ON new_exercises.session_id = new_session.id
+     ORDER BY new_exercises.sort_order`,
+    [
+      userId,
+      input.title,
+      input.date,
+      input.notes,
+      new Date().toISOString(),
+      JSON.stringify(
+        input.exercises.map((exercise, index) => ({
+          name: exercise.name,
+          sets: exercise.sets,
+          reps: exercise.reps,
+          weight_kg: exercise.weightKg,
+          sort_order: index,
+        })),
+      ),
+    ],
+  );
+  const session = result.rows[0];
+  if (!session) {
+    throw new Error("The new workout session could not be created.");
   }
+
+  const exercises: ExerciseRow[] = [];
+  for (const row of result.rows) {
+    if (row.exercise_name === null) {
+      continue;
+    }
+    if (
+      row.exercise_sets === null ||
+      row.exercise_reps === null ||
+      row.exercise_weight_kg === null ||
+      row.exercise_sort_order === null
+    ) {
+      throw new Error("The new workout exercise could not be loaded.");
+    }
+    exercises.push({
+      session_id: session.id,
+      name: row.exercise_name,
+      sets: row.exercise_sets,
+      reps: row.exercise_reps,
+      weight_kg: row.exercise_weight_kg,
+      sort_order: row.exercise_sort_order,
+    });
+  }
+
+  return serializeSession(session, exercises);
 }
 
 export async function setUserSessionCompletion(
-  database: PgPool,
+  database: PgQueryable,
   userId: number,
   sessionId: number,
   completed: boolean,
@@ -211,17 +226,11 @@ export async function setUserSessionCompletion(
   if (result.rows.length === 0) {
     return null;
   }
-
-  const client = await database.connect();
-  try {
-    return await getUserSession(client, userId, sessionId);
-  } finally {
-    client.release();
-  }
+  return getUserSession(database, userId, sessionId);
 }
 
 export async function deleteUserSession(
-  database: PgPool,
+  database: PgQueryable,
   userId: number,
   sessionId: number,
 ): Promise<boolean> {

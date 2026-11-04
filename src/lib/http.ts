@@ -32,6 +32,29 @@ export function apiError(
   return apiJson({ error: message }, status, headers);
 }
 
+function getErrorName(error: unknown): string {
+  if (error instanceof Error) {
+    return error.name;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "name" in error &&
+    typeof error.name === "string"
+  ) {
+    return error.name;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "constructor" in error &&
+    typeof error.constructor === "function"
+  ) {
+    return error.constructor.name || "UnknownError";
+  }
+  return "UnknownError";
+}
+
 export async function safelyRunApi(
   event: string,
   handler: () => Promise<NextResponse>,
@@ -50,7 +73,7 @@ export async function safelyRunApi(
       JSON.stringify({
         event: "api_request_failed",
         route: event,
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        errorName: getErrorName(error),
         errorCode,
       }),
     );

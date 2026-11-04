@@ -12,6 +12,7 @@ import type {
   WorkoutExercise,
   WorkoutSession,
 } from "@/lib/types";
+import { USERNAME_HTML_PATTERN } from "@/lib/validation";
 import {
   downloadSessionsPng,
   downloadSessionsSvg,
@@ -204,7 +205,7 @@ function Landing({
               autoComplete="username"
               minLength={3}
               maxLength={32}
-              pattern="[A-Za-z0-9_-]{3,32}"
+              pattern={USERNAME_HTML_PATTERN}
               required
             />
 

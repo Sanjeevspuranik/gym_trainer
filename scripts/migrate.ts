@@ -1,6 +1,7 @@
 import { loadEnvConfig } from "@next/env";
+import { Pool } from "@neondatabase/serverless";
 import { resolve } from "node:path";
-import { getDatabase } from "../src/lib/database";
+import { getMigrationDatabaseUrl } from "../src/lib/database";
 import { applyMigrations } from "../src/lib/migration-runner";
 
 loadEnvConfig(process.cwd());
@@ -8,7 +9,12 @@ loadEnvConfig(process.cwd());
 const MIGRATION_LOCK_ID = 732_194_181;
 
 async function main(): Promise<void> {
-  const database = getDatabase();
+  const database = new Pool({
+    connectionString: getMigrationDatabaseUrl(),
+    max: 1,
+    connectionTimeoutMillis: 5_000,
+    allowExitOnIdle: true,
+  });
   const client = await database.connect();
   let lockAcquired = false;
   try {

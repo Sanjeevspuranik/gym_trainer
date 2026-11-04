@@ -20,7 +20,11 @@ import {
   setUserSessionCompletion,
 } from "../src/lib/session-store";
 import { importSqliteDatabase } from "../scripts/sqlite-importer";
-import { parseWorkoutSession } from "../src/lib/validation";
+import { createUserWithSession } from "../src/lib/auth-store";
+import {
+  parseWorkoutSession,
+  USERNAME_HTML_PATTERN,
+} from "../src/lib/validation";
 
 async function createTestDatabase(): Promise<{
   pool: Pool;
@@ -63,6 +67,48 @@ test("database migrations are tracked and safe to rerun", async () => {
     assert.deepEqual(result.rows.map((row) => row.version), ["0001_initial"]);
   } finally {
     client.release();
+    await close();
+  }
+});
+
+test("account creation and its login session are atomic", async () => {
+  const { pool, database, close } = await createTestDatabase();
+  try {
+    const account = await createUserWithSession(pool, {
+      username: "new_account",
+      passwordSalt: "test-salt",
+      passwordHash: "test-hash",
+      tokenHash: "a".repeat(64),
+      expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    });
+    assert.deepEqual(account, { id: 1, username: "new_account" });
+
+    const sessions = await pool.query<{ user_id: number }>(
+      "SELECT user_id FROM auth_sessions WHERE token_hash = $1",
+      ["a".repeat(64)],
+    );
+    assert.deepEqual(sessions.rows, [{ user_id: 1 }]);
+
+    await assert.rejects(
+      createUserWithSession(pool, {
+        username: "new_account",
+        passwordSalt: "other-salt",
+        passwordHash: "other-hash",
+        tokenHash: "b".repeat(64),
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    );
+    const counts = await database.query<{
+      user_count: number;
+      session_count: number;
+    }>(
+      `SELECT
+         (SELECT COUNT(*)::INTEGER FROM users WHERE username = $1) AS user_count,
+         (SELECT COUNT(*)::INTEGER FROM auth_sessions WHERE token_hash = $2) AS session_count`,
+      ["new_account", "b".repeat(64)],
+    );
+    assert.deepEqual(counts.rows[0], { user_count: 1, session_count: 0 });
+  } finally {
     await close();
   }
 });
@@ -247,7 +293,7 @@ test("workout sessions are isolated to the owning user", async () => {
 });
 
 test("workout and exercise writes roll back together", async () => {
-  const { pool, close } = await createTestDatabase();
+  const { pool, database, close } = await createTestDatabase();
   try {
     const userId = await insertUser(pool, "rollback_user");
     await assert.rejects(
@@ -260,7 +306,7 @@ test("workout and exercise writes roll back together", async () => {
         ],
       }),
     );
-    const result = await pool.query<{ count: number }>(
+    const result = await database.query<{ count: number }>(
       "SELECT COUNT(*)::INTEGER AS count FROM workout_sessions WHERE user_id = $1",
       [userId],
     );
@@ -338,4 +384,12 @@ test("session payload validation rejects invalid dates and unsafe ranges", () =>
     exercises: [{ name: "Squat", sets: 4, reps: 6, weightKg: 1001 }],
   });
   assert.equal(invalidWeight.ok, false);
+});
+
+test("username input pattern compiles in Unicode sets mode and matches server rules", () => {
+  const pattern = new RegExp(`^(?:${USERNAME_HTML_PATTERN})$`, "v");
+  assert.equal(pattern.test("gym_user-1"), true);
+  assert.equal(pattern.test("ab"), false);
+  assert.equal(pattern.test("not valid"), false);
+  assert.equal(pattern.test(`${"a".repeat(33)}`), false);
 });
