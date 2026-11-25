@@ -251,7 +251,10 @@ function parseDay(value: unknown): RoutineDay | null {
 }
 
 export function parseWeeklyRoutine(value: unknown): RoutineValidationResult {
-  if (!isRecord(value) || value.version !== 1) {
+  if (
+    !isRecord(value) ||
+    (value.version !== 1 && value.version !== 2)
+  ) {
     return { ok: false, error: "This routine version is not supported." };
   }
   if (
@@ -298,7 +301,7 @@ export function parseWeeklyRoutine(value: unknown): RoutineValidationResult {
   return {
     ok: true,
     value: {
-      version: 1,
+      version: value.version,
       name: value.name.trim(),
       equipmentRule: value.equipmentRule.trim(),
       trainingWindow: {

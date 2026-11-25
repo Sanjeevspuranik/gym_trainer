@@ -69,8 +69,11 @@ local SQLite database automatically.
 
 `npm run db:migrate` also seeds the default weekly routine for existing accounts
 that do not already have a routine. New accounts receive the same default plan
-atomically during registration. Existing plan data is not overwritten by
-subsequent migration runs.
+atomically during registration. Seeding does not overwrite existing plans. A
+one-time version 1 to version 2 update replaces only the specified Tuesday and
+Saturday chest entries in existing base routines and legacy week overrides;
+Monday's matching exercises, unrelated exercises, and day notes are preserved.
+The upgrade is idempotent and won't reapply to version 2 routines.
 
 ## Deploy to Vercel
 

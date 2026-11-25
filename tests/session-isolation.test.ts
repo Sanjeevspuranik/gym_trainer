@@ -29,6 +29,7 @@ import {
   deleteUserRoutineWeekOverride,
   getUserRoutineForWeek,
   saveUserRoutineWeekOverride,
+  upgradeLegacyChestRoutines,
   seedDefaultRoutinesForExistingUsers,
 } from "../src/lib/routine-store";
 import { parseWeeklyRoutine } from "../src/lib/routine-validation";
@@ -187,6 +188,135 @@ test("existing accounts receive the default routine without overwriting edits", 
   }
 });
 
+test("legacy base routines receive only the chest updates and preserve week overrides", async () => {
+  const { pool, close } = await createTestDatabase();
+  try {
+    const userId = await insertUser(pool, "chest_upgrade_user");
+    const legacy = structuredClone(DEFAULT_WEEKLY_ROUTINE);
+    legacy.version = 1;
+    const tuesday = legacy.days.find((day) => day.weekday === 2);
+    const saturday = legacy.days.find((day) => day.weekday === 6);
+    const newTuesday = DEFAULT_WEEKLY_ROUTINE.days.find(
+      (day) => day.weekday === 2,
+    );
+    const newSaturday = DEFAULT_WEEKLY_ROUTINE.days.find(
+      (day) => day.weekday === 6,
+    );
+    assert.ok(tuesday);
+    assert.ok(saturday);
+    assert.ok(newTuesday);
+    assert.ok(newSaturday);
+    const newTuesdayChestKeys = new Set([
+      "tuesday-incline-db-press",
+      "tuesday-flat-db-press",
+      "tuesday-db-flyes",
+      "tuesday-db-pullover-finisher",
+    ]);
+    tuesday.notes = "Keep my existing push-day notes.";
+    tuesday.exercises = [
+      { ...newTuesday.exercises[0]!, key: "tuesday-bench-press" },
+      { ...newTuesday.exercises[1]!, key: "tuesday-incline-press" },
+      ...newTuesday.exercises.filter(
+        (exercise) => !newTuesdayChestKeys.has(exercise.key),
+      ),
+    ];
+    const oldSaturdayFlat = {
+      ...newSaturday.exercises.find(
+        (exercise) => exercise.key === "saturday-neutral-grip-flat-db-press",
+      )!,
+      key: "saturday-flat-bench",
+      options: [
+        {
+          ...newSaturday.exercises.find(
+            (exercise) =>
+              exercise.key === "saturday-neutral-grip-flat-db-press",
+          )!.options[0]!,
+          name: "Flat Dumbbell Bench Press",
+        },
+      ],
+    };
+    saturday.exercises = saturday.exercises.map((exercise) =>
+      exercise.key === "saturday-neutral-grip-flat-db-press"
+        ? oldSaturdayFlat
+        : exercise,
+    );
+    const thursday = legacy.days.find((day) => day.weekday === 4);
+    assert.ok(thursday);
+    thursday.notes = "Keep this unrelated day unchanged.";
+
+    await pool.query(
+      `INSERT INTO user_routine_plans (user_id, routine_json)
+       VALUES ($1, $2::jsonb)`,
+      [userId, JSON.stringify(legacy)],
+    );
+    const weeklyOverride = structuredClone(legacy);
+    weeklyOverride.days[1]!.title = "My saved custom week";
+    await pool.query(
+      `INSERT INTO routine_week_overrides (user_id, week_start, routine_json)
+       VALUES ($1, '2026-11-23', $2::jsonb)`,
+      [userId, JSON.stringify(weeklyOverride)],
+    );
+
+    assert.equal(await upgradeLegacyChestRoutines(pool), 2);
+    assert.equal(await upgradeLegacyChestRoutines(pool), 0);
+
+    const upgraded = await pool.query<{
+      routine_json: typeof DEFAULT_WEEKLY_ROUTINE;
+    }>(
+      "SELECT routine_json FROM user_routine_plans WHERE user_id = $1",
+      [userId],
+    );
+    const routine = upgraded.rows[0]?.routine_json;
+    assert.ok(routine);
+    assert.equal(routine.version, 2);
+    assert.equal(
+      routine.days.find((day) => day.weekday === 2)?.notes,
+      "Keep my existing push-day notes.",
+    );
+    assert.equal(
+      routine.days.find((day) => day.weekday === 4)?.notes,
+      "Keep this unrelated day unchanged.",
+    );
+    assert.deepEqual(
+      routine.days
+        .find((day) => day.weekday === 2)
+        ?.exercises.map((exercise) => exercise.key),
+      newTuesday.exercises.map((exercise) => exercise.key),
+    );
+    assert.equal(
+      routine.days
+        .find((day) => day.weekday === 6)
+        ?.exercises.find(
+          (exercise) =>
+            exercise.key === "saturday-neutral-grip-flat-db-press",
+        )?.options[0]?.name,
+      "Neutral-Grip Flat Dumbbell Press",
+    );
+
+    const preservedOverride = await pool.query<{
+      routine_json: typeof DEFAULT_WEEKLY_ROUTINE;
+    }>(
+      `SELECT routine_json
+       FROM routine_week_overrides
+       WHERE user_id = $1 AND week_start = '2026-11-23'`,
+      [userId],
+    );
+    assert.equal(preservedOverride.rows[0]?.routine_json.version, 2);
+    assert.equal(
+      preservedOverride.rows[0]?.routine_json.days[1]?.title,
+      "My saved custom week",
+    );
+    assert.deepEqual(
+      preservedOverride.rows[0]?.routine_json.days[1]?.exercises.map(
+        (exercise) => exercise.key,
+      ),
+      newTuesday.exercises.map((exercise) => exercise.key),
+    );
+  } finally {
+    await close();
+  }
+});
+
 test("routine data covers the full week and cardio only on the supplied lifting days", () => {
   assert.deepEqual(
     DEFAULT_WEEKLY_ROUTINE.days.map((day) => day.weekday),
@@ -219,6 +349,109 @@ test("routine data covers the full week and cardio only on the supplied lifting 
       [5, 7.5, 3],
     ],
   );
+});
+
+test("the requested chest exercises are updated on Monday, Tuesday, and Saturday only", () => {
+  const monday = DEFAULT_WEEKLY_ROUTINE.days.find((day) => day.weekday === 1);
+  const tuesday = DEFAULT_WEEKLY_ROUTINE.days.find((day) => day.weekday === 2);
+  const saturday = DEFAULT_WEEKLY_ROUTINE.days.find((day) => day.weekday === 6);
+  assert.ok(monday);
+  assert.ok(tuesday);
+  assert.ok(saturday);
+
+  assert.deepEqual(
+    monday.exercises
+      .filter((exercise) =>
+        ["monday-incline-db-press", "monday-flat-db-press"].includes(
+          exercise.key,
+        ),
+      )
+      .map((exercise) => [
+        exercise.sets,
+        exercise.reps,
+        exercise.options[0]?.minWeightKg,
+        exercise.options[0]?.maxWeightKg,
+      ]),
+    [
+      [{ min: 2, max: 2 }, { min: 12, max: 12 }, 12.5, 12.5],
+      [{ min: 2, max: 2 }, { min: 12, max: 12 }, 12.5, 12.5],
+    ],
+  );
+
+  const tuesdayChest = tuesday.exercises.slice(0, 4);
+  assert.deepEqual(
+    tuesdayChest.map((exercise) => [
+      exercise.key,
+      exercise.sets,
+      exercise.reps,
+      exercise.options.map((option) => [
+        option.name,
+        option.minWeightKg,
+        option.maxWeightKg,
+        option.weightLabel,
+      ]),
+    ]),
+    [
+      [
+        "tuesday-incline-db-press",
+        { min: 3, max: 3 },
+        { min: 10, max: 12 },
+        [["Incline Dumbbell Bench Press", 12.5, 15, "kg each"]],
+      ],
+      [
+        "tuesday-flat-db-press",
+        { min: 3, max: 3 },
+        { min: 10, max: 12 },
+        [
+          ["Flat Dumbbell Bench Press", 12.5, 12.5, "kg each"],
+          ["Dumbbell Squeeze Press", 12.5, 12.5, "kg each"],
+        ],
+      ],
+      [
+        "tuesday-db-flyes",
+        { min: 3, max: 3 },
+        { min: 12, max: 15 },
+        [
+          ["Incline Dumbbell Flyes", 7.5, 10, "kg each"],
+          ["Flat Dumbbell Flyes", 7.5, 10, "kg each"],
+        ],
+      ],
+      [
+        "tuesday-db-pullover-finisher",
+        { min: 2, max: 2 },
+        { min: 12, max: 15 },
+        [
+          ["Dumbbell Pullover", 12.5, 12.5, "kg"],
+          ["Svend-Style Dumbbell Press", 12.5, 12.5, "kg"],
+        ],
+      ],
+    ],
+  );
+  assert.equal(tuesday.exercises[4]?.key, "tuesday-shoulder-press");
+  assert.equal(tuesday.exercises[5]?.key, "tuesday-lateral-raise");
+  assert.equal(tuesday.exercises[6]?.key, "tuesday-triceps");
+
+  assert.equal(
+    saturday.exercises.find(
+      (exercise) => exercise.key === "saturday-incline-db-press",
+    )?.options[0]?.minWeightKg,
+    15,
+  );
+  assert.equal(
+    saturday.exercises.find(
+      (exercise) =>
+        exercise.key === "saturday-incline-db-press",
+    )?.options[0]?.maxWeightKg,
+    15,
+  );
+  const neutralGrip = saturday.exercises.find(
+    (exercise) =>
+      exercise.key === "saturday-neutral-grip-flat-db-press",
+  );
+  assert.equal(neutralGrip?.reps.min, 12);
+  assert.equal(neutralGrip?.reps.max, 12);
+  assert.equal(neutralGrip?.options[0]?.minWeightKg, 12.5);
+  assert.equal(neutralGrip?.options[0]?.maxWeightKg, 15);
 });
 
 test("routine week dates use local Monday-based calendar weeks", () => {

@@ -3,7 +3,10 @@ import { Pool, type PoolClient } from "@neondatabase/serverless";
 import { resolve } from "node:path";
 import { getMigrationDatabaseUrl } from "../src/lib/database";
 import { applyMigrations } from "../src/lib/migration-runner";
-import { seedDefaultRoutinesForExistingUsers } from "../src/lib/routine-store";
+import {
+  seedDefaultRoutinesForExistingUsers,
+  upgradeLegacyChestRoutines,
+} from "../src/lib/routine-store";
 
 loadEnvConfig(process.cwd());
 
@@ -88,6 +91,12 @@ async function main(): Promise<void> {
       console.log("Database schema is up to date.");
     } else {
       console.log(`Applied database migrations: ${applied.join(", ")}`);
+    }
+    const upgradedRoutineCount = await upgradeLegacyChestRoutines(client);
+    if (upgradedRoutineCount > 0) {
+      console.log(
+        `Updated chest exercises in ${upgradedRoutineCount} existing routine(s).`,
+      );
     }
     const seededRoutineCount = await seedDefaultRoutinesForExistingUsers(client);
     if (seededRoutineCount > 0) {

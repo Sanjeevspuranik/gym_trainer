@@ -55,7 +55,7 @@ export type RoutineDay = {
 };
 
 export type WeeklyRoutine = {
-  version: 1;
+  version: 1 | 2;
   name: string;
   equipmentRule: string;
   trainingWindow: {
@@ -146,7 +146,7 @@ const dumbbells = "Dumbbells";
 const barbell = "Barbell";
 
 export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
-  version: 1,
+  version: 2,
   name: "Weekly Strength & Recovery",
   equipmentRule:
     "Use dumbbells, barbells, pulley/plate-loaded/leverage machines. Exclude cable tower exercises.",
@@ -350,37 +350,9 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
       recoveryActivities: [],
       exercises: [
         exercise(
-          "tuesday-bench-press",
+          "tuesday-incline-db-press",
           null,
           1,
-          3,
-          { min: 8, max: 10 },
-          [
-            option(
-              "Barbell Bench Press",
-              barbell,
-              30,
-              40,
-              "kg starting load",
-              "suggested-start",
-              "Choose a load that allows controlled reps.",
-            ),
-            option(
-              "Flat Dumbbell Press",
-              dumbbells,
-              12.5,
-              12.5,
-              "kg each",
-              "baseline",
-              "Choose a load that allows controlled reps.",
-            ),
-          ],
-          { restSeconds: 90, tempo: "2–3 seconds lowering" },
-        ),
-        exercise(
-          "tuesday-incline-press",
-          null,
-          2,
           3,
           { min: 10, max: 12 },
           [
@@ -388,7 +360,7 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
               "Incline Dumbbell Bench Press",
               dumbbells,
               12.5,
-              12.5,
+              15,
               "kg each",
               "baseline",
               "Upper chest focus.",
@@ -397,9 +369,91 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
           { restSeconds: 90, tempo: "2–3 seconds lowering" },
         ),
         exercise(
-          "tuesday-shoulder-press",
+          "tuesday-flat-db-press",
+          null,
+          2,
+          3,
+          { min: 10, max: 12 },
+          [
+            option(
+              "Flat Dumbbell Bench Press",
+              dumbbells,
+              12.5,
+              12.5,
+              "kg each",
+              "baseline",
+              "Use the squeeze press alternative if preferred.",
+            ),
+            option(
+              "Dumbbell Squeeze Press",
+              dumbbells,
+              12.5,
+              12.5,
+              "kg each",
+              "baseline",
+              "Press the dumbbells together throughout the movement.",
+            ),
+          ],
+          { restSeconds: 90, tempo: "2–3 seconds lowering" },
+        ),
+        exercise(
+          "tuesday-db-flyes",
           null,
           3,
+          3,
+          { min: 12, max: 15 },
+          [
+            option(
+              "Incline Dumbbell Flyes",
+              dumbbells,
+              7.5,
+              10,
+              "kg each",
+              "baseline",
+              "Use a comfortable range of motion and controlled tempo.",
+            ),
+            option(
+              "Flat Dumbbell Flyes",
+              dumbbells,
+              7.5,
+              10,
+              "kg each",
+              "baseline",
+              "Use a comfortable range of motion and controlled tempo.",
+            ),
+          ],
+        ),
+        exercise(
+          "tuesday-db-pullover-finisher",
+          null,
+          4,
+          2,
+          { min: 12, max: 15 },
+          [
+            option(
+              "Dumbbell Pullover",
+              dumbbell,
+              12.5,
+              12.5,
+              "kg",
+              "baseline",
+              "One-dumbbell finisher.",
+            ),
+            option(
+              "Svend-Style Dumbbell Press",
+              dumbbells,
+              12.5,
+              12.5,
+              "kg",
+              "baseline",
+              "Finisher alternative; hold the dumbbells in a squeeze press.",
+            ),
+          ],
+        ),
+        exercise(
+          "tuesday-shoulder-press",
+          null,
+          5,
           3,
           { min: 10, max: 12 },
           [
@@ -418,7 +472,7 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
         exercise(
           "tuesday-lateral-raise",
           null,
-          4,
+          6,
           3,
           { min: 12, max: 15 },
           [
@@ -437,7 +491,7 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
         exercise(
           "tuesday-triceps",
           null,
-          5,
+          7,
           3,
           { min: 10, max: 12 },
           [
@@ -818,33 +872,24 @@ export const DEFAULT_WEEKLY_ROUTINE: WeeklyRoutine = {
             option(
               "Incline Dumbbell Bench Press",
               dumbbells,
-              12.5,
+              15,
               15,
               "kg each",
               "progression-target",
-              "Use 15 kg when form stays locked in.",
+              "Overload target; use when form stays locked in.",
             ),
           ],
           { restSeconds: 90 },
         ),
         exercise(
-          "saturday-flat-bench",
+          "saturday-neutral-grip-flat-db-press",
           "A",
           3,
           2,
-          { min: 10, max: 12 },
+          12,
           [
             option(
-              "Barbell Bench Press",
-              barbell,
-              null,
-              null,
-              "choose at session",
-              "choose-at-session",
-              "No barbell starting load supplied.",
-            ),
-            option(
-              "Flat Dumbbell Bench Press",
+              "Neutral-Grip Flat Dumbbell Press",
               dumbbells,
               12.5,
               15,
