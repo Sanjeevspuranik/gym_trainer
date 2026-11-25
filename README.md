@@ -91,19 +91,16 @@ subsequent migration runs.
    | `CRON_SECRET` | Yes | Secret used to authorize the scheduled cleanup endpoint; at least 32 characters |
 
    Do not prefix secrets with `NEXT_PUBLIC_`.
-4. Apply migrations to the Preview and Production databases from a trusted
-   shell, using the matching direct/unpooled connection string. The application
-   uses Neon HTTP with pooled `DATABASE_URL`; migrations use the direct URL for
-   advisory locks. Migrations are deliberately not run during the Vercel build.
-
-   ```powershell
-   $env:DATABASE_URL_UNPOOLED = "<the matching Neon direct connection string>"
-   npm run db:migrate
-   Remove-Item Env:DATABASE_URL_UNPOOLED
-   ```
+4. Ensure the Neon integration provides both pooled `DATABASE_URL` and direct
+   `DATABASE_URL_UNPOOLED` to Preview and Production. The configured Vercel
+   build command runs `npm run db:migrate` before `npm run build`, so each
+   deployment applies pending migrations to its own database before it can go
+   live. A failed migration fails the build. Keep migrations additive and
+   backward-compatible when possible; run `npm run db:migrate` locally for
+   development databases.
 5. If you want to carry over the local SQLite accounts and workouts, follow the
    [data migration](#migrate-existing-sqlite-data) instructions before inviting
-   users.
+   users. Use the Production database's direct URL for the import.
 6. Deploy a Preview, test registration and a workout round-trip, and check
    `/api/health`. Then deploy Production. The daily cleanup job is declared in
    [`vercel.json`](./vercel.json); make sure `CRON_SECRET` is configured.

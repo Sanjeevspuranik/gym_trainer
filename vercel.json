@@ -1,4 +1,5 @@
 {
+  "buildCommand": "npm run db:migrate && npm run build",
   "crons": [
     {
       "path": "/api/cron/cleanup",
