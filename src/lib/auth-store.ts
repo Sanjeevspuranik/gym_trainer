@@ -1,4 +1,5 @@
 import type { PgQueryable } from "./database";
+import { DEFAULT_WEEKLY_ROUTINE } from "./routine-plan";
 import type { PublicUser } from "./types";
 
 export type NewAccountWithSession = {
@@ -26,16 +27,24 @@ export async function createUserWithSession(
        SELECT $4, new_user.id, $5, NOW()
        FROM new_user
        RETURNING user_id
+     ),
+     new_routine_plan AS (
+       INSERT INTO user_routine_plans (user_id, routine_json)
+       SELECT new_user.id, $6::jsonb
+       FROM new_user
+       RETURNING user_id
      )
      SELECT new_user.id, new_user.username
      FROM new_user
-     JOIN new_auth_session ON new_auth_session.user_id = new_user.id`,
+     JOIN new_auth_session ON new_auth_session.user_id = new_user.id
+     JOIN new_routine_plan ON new_routine_plan.user_id = new_user.id`,
     [
       input.username,
       input.passwordSalt,
       input.passwordHash,
       input.tokenHash,
       input.expiresAt,
+      JSON.stringify(DEFAULT_WEEKLY_ROUTINE),
     ],
   );
   const user = result.rows[0];

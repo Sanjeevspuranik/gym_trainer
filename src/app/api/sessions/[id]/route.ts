@@ -51,16 +51,22 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       return apiError("The completed value must be true or false.", 400);
     }
 
-    const session = await setUserSessionCompletion(
+    const result = await setUserSessionCompletion(
       getDatabase(),
       user.id,
       sessionId,
       parsed.value.completed,
     );
-    if (!session) {
+    if (result.status === "not-found") {
       return apiError("Workout session not found.", 404);
     }
-    return apiJson({ session });
+    if (result.status === "not-ready") {
+      return apiError(
+        "Complete every planned set and the treadmill finisher before finishing this workout.",
+        409,
+      );
+    }
+    return apiJson({ session: result.session });
   });
 }
 

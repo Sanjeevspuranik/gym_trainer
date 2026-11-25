@@ -14,6 +14,16 @@ motion preferences. Session histories can be exported as PNG or SVG.
   in kilograms.
 - Mark sessions complete, reopen them, or delete them.
 - View a personal summary and session history for the signed-in account.
+- See the current day's routine, preview other days in the week, and navigate
+  between weeks.
+- Edit a specific week's training schedule and restore that week to the default
+  routine without changing other weeks or workout history.
+- Start a planned lifting session, check off sets while recording actual reps
+  and weights, mark the treadmill finisher, and continue an in-progress workout.
+- View the 120–150 g/day protein target as a chip; there is no food or intake
+  logging.
+- Store a private default weekly routine, week-specific plan overrides, and
+  per-set workout result data.
 - Export the complete signed-in account history as a PNG or scalable SVG poster.
 - View short text-based form cues for squats, presses, and hip hinges.
 
@@ -56,6 +66,11 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000), create an account, and add
 a workout. The app requires a PostgreSQL connection; it no longer creates a
 local SQLite database automatically.
+
+`npm run db:migrate` also seeds the default weekly routine for existing accounts
+that do not already have a routine. New accounts receive the same default plan
+atomically during registration. Existing plan data is not overwritten by
+subsequent migration runs.
 
 ## Deploy to Vercel
 
@@ -151,12 +166,37 @@ event names and error codes, not passwords, session tokens, or database URLs.
 
 - [`src/app`](./src/app) contains the App Router pages, API routes, and shared
   styles.
+- [`src/components/routine-window.tsx`](./src/components/routine-window.tsx)
+  renders the current week's routine, day preview, and week edit/reset controls.
+- [`src/components/routine-editor.tsx`](./src/components/routine-editor.tsx)
+  edits that week's schedule, exercises, alternatives, loads, rest, and cardio.
+- [`src/components/workout-tracker.tsx`](./src/components/workout-tracker.tsx)
+  prepares a routine workout and tracks saved per-set results and cardio
+  completion.
 - [`src/lib/auth.ts`](./src/lib/auth.ts) hashes passphrases with PBKDF2, issues
   opaque random cookies, and stores only a hash of each cookie token.
 - [`src/lib/database.ts`](./src/lib/database.ts) validates `DATABASE_URL` and
   uses Neon's stateless HTTP driver for serverless application queries.
 - [`src/lib/session-store.ts`](./src/lib/session-store.ts) uses parameterized
   PostgreSQL queries and enforces owner-scoped reads and writes.
+- [`src/lib/routine-plan.ts`](./src/lib/routine-plan.ts) defines the supplied
+  seven-day plan, including exercise alternatives, target ranges, supersets,
+  rest/transition notes, cardio, and the protein target chip value.
+- [`src/lib/routine-store.ts`](./src/lib/routine-store.ts) seeds missing
+  per-account default routines without overwriting existing plans.
+- [`src/lib/routine-dates.ts`](./src/lib/routine-dates.ts) calculates local
+  Monday-based routine weeks and day dates.
+- [`src/app/api/routine/route.ts`](./src/app/api/routine/route.ts) reads,
+  validates, saves, and resets the signed-in user's routine for a selected week.
+- [`src/lib/routine-validation.ts`](./src/lib/routine-validation.ts) validates
+  complete weekly routine updates before saving.
+- [`db/migrations/0002_routines_and_set_results.sql`](./db/migrations/0002_routines_and_set_results.sql)
+  adds routine storage, Monday-based weekly override storage, and per-set
+  results linked to workout exercises.
+- [`db/migrations/0003_routine_workout_tracking.sql`](./db/migrations/0003_routine_workout_tracking.sql)
+  adds routine snapshots and treadmill/set target fields to workout history.
+  Routine sessions store their plan snapshot, actual set results, and finisher
+  completion in workout history.
 - [`src/lib/rate-limit.ts`](./src/lib/rate-limit.ts) stores HMAC-hashed auth
   rate-limit buckets in PostgreSQL.
 - [`db/migrations`](./db/migrations) contains ordered SQL migrations applied by
@@ -176,9 +216,15 @@ event names and error codes, not passwords, session tokens, or database URLs.
 | `POST` | `/api/auth/login` | Sign in |
 | `POST` | `/api/auth/logout` | Revoke the current login session |
 | `GET` | `/api/auth/me` | Return the current account |
+| `GET` | `/api/routine?weekStart=YYYY-MM-DD` | Get the signed-in user's routine for a Monday-based week |
+| `PUT` | `/api/routine?weekStart=YYYY-MM-DD` | Save a validated override for that user's selected week |
+| `DELETE` | `/api/routine?weekStart=YYYY-MM-DD` | Remove that user's selected-week override and restore the default |
 | `GET` | `/api/sessions` | List only the current account's workouts |
-| `POST` | `/api/sessions` | Add a workout and its exercise rows atomically |
-| `PATCH` | `/api/sessions/:id` | Mark an owned workout complete or reopen it |
+| `POST` | `/api/sessions` | Add a manual workout and its exercise rows atomically |
+| `POST` | `/api/sessions/from-routine?weekStart=YYYY-MM-DD` | Start a workout from the signed-in user's selected routine day |
+| `PATCH` | `/api/sessions/:id/sets` | Save actual reps, weight, and completion for one owned workout set |
+| `PATCH` | `/api/sessions/:id/cardio` | Mark an owned routine treadmill finisher complete or incomplete |
+| `PATCH` | `/api/sessions/:id` | Mark an owned workout complete or reopen it; planned workouts require completed sets and cardio |
 | `DELETE` | `/api/sessions/:id` | Delete an owned workout |
 | `GET` | `/api/health` | Check application-to-database connectivity |
 | `GET` | `/api/cron/cleanup` | Remove expired auth and rate-limit records; requires the cron bearer secret |
@@ -197,8 +243,11 @@ npm run build
 ```
 
 The tests use PGlite, a PostgreSQL-compatible in-memory test database, to cover
-migrations, account isolation, transaction rollback, distributed rate-limit
-state, SQLite import, and image exports without a live production database.
+migrations, routine seeding, week constraints, set-result storage, account
+isolation, week override privacy and reset, routine validation, starting routine
+workouts, owner-scoped set/cardio updates, completion gating, transaction
+rollback, distributed rate-limit state, SQLite import, and image exports
+without a live production database.
 
 ## Security and production scope
 

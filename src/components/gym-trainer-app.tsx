@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -14,12 +15,26 @@ import type {
 } from "@/lib/types";
 import { USERNAME_HTML_PATTERN } from "@/lib/validation";
 import {
+  currentLocalDate,
+  routineWeekStart,
+  shiftLocalDate,
+} from "@/lib/routine-dates";
+import type { WeeklyRoutine } from "@/lib/routine-plan";
+import type { RoutineExerciseChoice } from "@/lib/routine-session";
+import RoutineWindow from "@/components/routine-window";
+import {
   downloadSessionsPng,
   downloadSessionsSvg,
 } from "@/lib/session-image-export";
 
 type AuthMode = "login" | "register";
 type ExportFormat = "png" | "svg";
+type RoutineLoadResult = {
+  weekStart: string;
+  routine?: WeeklyRoutine;
+  isOverride?: boolean;
+  error?: string;
+};
 type ExerciseDraft = {
   id: number;
   name: string;
@@ -74,7 +89,7 @@ function errorText(error: unknown): string {
 }
 
 function defaultDateValue(): string {
-  return new Date().toISOString().slice(0, 10);
+  return currentLocalDate();
 }
 
 function newExerciseDraft(id: number): ExerciseDraft {
@@ -262,11 +277,13 @@ function SessionCard({
   pending,
   onToggle,
   onDelete,
+  onContinue,
 }: {
   session: WorkoutSession;
   pending: boolean;
   onToggle: (session: WorkoutSession) => void;
   onDelete: (session: WorkoutSession) => void;
+  onContinue: (session: WorkoutSession) => void;
 }) {
   return (
     <article className="session-card">
@@ -283,6 +300,27 @@ function SessionCard({
       </div>
 
       {session.notes && <p className="session-notes">{session.notes}</p>}
+      {session.routine && (
+        <p className="session-notes">
+          Planned {session.routine.day.title} ·{" "}
+          {session.exercises.reduce(
+            (total, exercise) =>
+              total +
+              exercise.setResults.filter((set) => set.completedAt !== null)
+                .length,
+            0,
+          )}
+          /
+          {session.exercises.reduce(
+            (total, exercise) => total + exercise.setResults.length,
+            0,
+          )}{" "}
+          sets complete
+          {session.routine.day.cardioFinisher.length > 0
+            ? ` · Treadmill ${session.routine.cardioCompleted ? "complete" : "not complete"}`
+            : ""}
+        </p>
+      )}
       {session.exercises.length > 0 ? (
         <ul className="session-exercises">
           {session.exercises.map((exercise, index) => (
@@ -291,6 +329,26 @@ function SessionCard({
               {exercise.weightKg === 0
                 ? "bodyweight"
                 : `${exercise.weightKg} kg`}
+              {exercise.setResults.length > 0 && (
+                <details className="session-set-details">
+                  <summary>
+                    {exercise.setResults.filter(
+                      (set) => set.completedAt !== null,
+                    ).length}
+                    /{exercise.setResults.length} sets completed
+                  </summary>
+                  <ul>
+                    {exercise.setResults.map((set) => (
+                      <li key={set.setNumber}>
+                        Set {set.setNumber}:{" "}
+                        {set.actualReps ?? set.targetReps} reps ·{" "}
+                        {set.actualWeightKg ?? set.targetWeightKg} kg
+                        {set.completedAt ? " · done" : " · not done"}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </li>
           ))}
         </ul>
@@ -299,6 +357,17 @@ function SessionCard({
       )}
 
       <div className="session-actions">
+        {session.routine && !session.completed && (
+          <button
+            className="button button-compact"
+            type="button"
+            disabled={pending}
+            aria-label={`Continue ${session.title} workout`}
+            onClick={() => onContinue(session)}
+          >
+            Continue workout
+          </button>
+        )}
         <button
           className="button button-outline button-compact"
           type="button"
@@ -328,6 +397,17 @@ export default function GymTrainerApp() {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<PublicUser | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[]>([]);
+  const [activeWorkoutId, setActiveWorkoutId] = useState<number | null>(null);
+  const [routineWorkoutStarting, setRoutineWorkoutStarting] = useState(false);
+  const [pendingSetUpdate, setPendingSetUpdate] = useState<string | null>(null);
+  const [pendingCardioSessionId, setPendingCardioSessionId] = useState<number | null>(null);
+  const [pendingFinishSessionId, setPendingFinishSessionId] = useState<number | null>(null);
+  const [routineResult, setRoutineResult] = useState<RoutineLoadResult | null>(
+    null,
+  );
+  const [todayDate, setTodayDate] = useState(currentLocalDate);
+  const [selectedRoutineDate, setSelectedRoutineDate] =
+    useState(currentLocalDate);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authError, setAuthError] = useState("");
   const [startupMessage, setStartupMessage] = useState("");
@@ -346,12 +426,140 @@ export default function GymTrainerApp() {
   ]);
   const [nextExerciseId, setNextExerciseId] = useState(2);
   const [sessionDate, setSessionDate] = useState(defaultDateValue);
+  const todayDateRef = useRef(todayDate);
+  const selectedRoutineWeekStart = routineWeekStart(selectedRoutineDate);
+
+  useEffect(() => {
+    let timerId: number;
+
+    function scheduleNextDayRefresh() {
+      const now = new Date();
+      const nextDay = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() + 1,
+        0,
+        0,
+        1,
+      );
+      timerId = window.setTimeout(() => {
+        const previousToday = todayDateRef.current;
+        const nextToday = currentLocalDate();
+        todayDateRef.current = nextToday;
+        setTodayDate(nextToday);
+        setSelectedRoutineDate((current) =>
+          current === previousToday ? nextToday : current,
+        );
+        scheduleNextDayRefresh();
+      }, Math.max(1_000, nextDay.getTime() - now.getTime()));
+    }
+
+    scheduleNextDayRefresh();
+    return () => window.clearTimeout(timerId);
+  }, []);
+
+  useEffect(() => {
+    const userId = user?.id;
+    if (userId === undefined) {
+      return;
+    }
+
+    let active = true;
+    const weekStart = selectedRoutineWeekStart;
+    void apiRequest<{
+      routine: WeeklyRoutine;
+      weekStart: string;
+      isOverride: boolean;
+    }>(
+      `/api/routine?weekStart=${encodeURIComponent(weekStart)}`,
+    )
+      .then((result) => {
+        if (active) {
+          setRoutineResult({
+            weekStart,
+            routine: result.routine,
+            isOverride: result.isOverride,
+          });
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setRoutineResult({ weekStart, error: errorText(error) });
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedRoutineWeekStart, user?.id]);
+
+  const selectedRoutine =
+    routineResult?.weekStart === selectedRoutineWeekStart
+      ? routineResult.routine ?? null
+      : null;
+  const routineError =
+    routineResult?.weekStart === selectedRoutineWeekStart
+      ? routineResult.error ?? ""
+      : "";
+  const routineLoading =
+    user !== null &&
+    routineResult?.weekStart !== selectedRoutineWeekStart;
+  const activeWorkout =
+    activeWorkoutId === null
+      ? null
+      : sessions.find((session) => session.id === activeWorkoutId) ?? null;
+  const inProgressRoutineWorkout =
+    sessions.find((session) => session.routine !== null && !session.completed) ??
+    null;
 
   const refreshSessions = useCallback(async () => {
     const result = await apiRequest<{ sessions: WorkoutSession[] }>(
       "/api/sessions",
     );
     setSessions(result.sessions);
+  }, []);
+
+  const saveRoutineWeek = useCallback(
+    async (weekStart: string, routine: WeeklyRoutine) => {
+      const result = await apiRequest<{
+        routine: WeeklyRoutine;
+        weekStart: string;
+        isOverride: boolean;
+      }>(`/api/routine?weekStart=${encodeURIComponent(weekStart)}`, {
+        method: "PUT",
+        body: JSON.stringify({ routine }),
+      });
+      setRoutineResult({
+        weekStart: result.weekStart,
+        routine: result.routine,
+        isOverride: result.isOverride,
+      });
+    },
+    [],
+  );
+
+  const resetRoutineWeek = useCallback(async (weekStart: string) => {
+    const result = await apiRequest<{
+      routine: WeeklyRoutine;
+      weekStart: string;
+      isOverride: boolean;
+    }>(`/api/routine?weekStart=${encodeURIComponent(weekStart)}`, {
+      method: "DELETE",
+    });
+    setRoutineResult({
+      weekStart: result.weekStart,
+      routine: result.routine,
+      isOverride: result.isOverride,
+    });
+  }, []);
+
+  const upsertSession = useCallback((session: WorkoutSession) => {
+    setSessions((current) => {
+      const exists = current.some((item) => item.id === session.id);
+      return exists
+        ? current.map((item) => (item.id === session.id ? session : item))
+        : [session, ...current];
+    });
   }, []);
 
   useEffect(() => {
@@ -427,6 +635,8 @@ export default function GymTrainerApp() {
       });
       setUser(null);
       setSessions([]);
+      setRoutineResult(null);
+      setActiveWorkoutId(null);
       setAuthMode("login");
       setAuthError("");
       setSessionMessage("");
@@ -539,10 +749,113 @@ export default function GymTrainerApp() {
       setSessions((current) =>
         current.filter((item) => item.id !== session.id),
       );
+      setActiveWorkoutId((current) =>
+        current === session.id ? null : current,
+      );
     } catch (error) {
       setDashboardError(errorText(error));
     } finally {
       setPendingSessionId(null);
+    }
+  }
+
+  async function handleStartRoutineWorkout(
+    weekStart: string,
+    date: string,
+    exerciseChoices: RoutineExerciseChoice[],
+  ) {
+    if (inProgressRoutineWorkout) {
+      setActiveWorkoutId(inProgressRoutineWorkout.id);
+      return;
+    }
+
+    setRoutineWorkoutStarting(true);
+    try {
+      const result = await apiRequest<{ session: WorkoutSession }>(
+        `/api/sessions/from-routine?weekStart=${encodeURIComponent(weekStart)}`,
+        {
+          method: "POST",
+          body: JSON.stringify({ date, exerciseChoices }),
+        },
+      );
+      upsertSession(result.session);
+      setActiveWorkoutId(result.session.id);
+    } catch (error) {
+      throw new Error(errorText(error));
+    } finally {
+      setRoutineWorkoutStarting(false);
+    }
+  }
+
+  async function handleRoutineSetUpdate(
+    sessionId: number,
+    exerciseId: number,
+    setNumber: number,
+    actualReps: number,
+    actualWeightKg: number,
+    completed: boolean,
+  ) {
+    const pendingKey = `${exerciseId}:${setNumber}`;
+    setPendingSetUpdate(pendingKey);
+    try {
+      const result = await apiRequest<{ session: WorkoutSession }>(
+        `/api/sessions/${sessionId}/sets`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            exerciseId,
+            setNumber,
+            actualReps,
+            actualWeightKg,
+            completed,
+          }),
+        },
+      );
+      upsertSession(result.session);
+    } catch (error) {
+      throw new Error(errorText(error));
+    } finally {
+      setPendingSetUpdate(null);
+    }
+  }
+
+  async function handleRoutineCardioUpdate(
+    sessionId: number,
+    completed: boolean,
+  ) {
+    setPendingCardioSessionId(sessionId);
+    try {
+      const result = await apiRequest<{ session: WorkoutSession }>(
+        `/api/sessions/${sessionId}/cardio`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ completed }),
+        },
+      );
+      upsertSession(result.session);
+    } catch (error) {
+      throw new Error(errorText(error));
+    } finally {
+      setPendingCardioSessionId(null);
+    }
+  }
+
+  async function handleFinishRoutineWorkout(sessionId: number) {
+    setPendingFinishSessionId(sessionId);
+    try {
+      const result = await apiRequest<{ session: WorkoutSession }>(
+        `/api/sessions/${sessionId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ completed: true }),
+        },
+      );
+      upsertSession(result.session);
+      setActiveWorkoutId(null);
+    } catch (error) {
+      throw new Error(errorText(error));
+    } finally {
+      setPendingFinishSessionId(null);
     }
   }
 
@@ -633,6 +946,45 @@ export default function GymTrainerApp() {
                 <span className="shape shape-diamond" />
               </div>
             </div>
+
+            <RoutineWindow
+              routine={selectedRoutine}
+              selectedDate={selectedRoutineDate}
+              todayDate={todayDate}
+              weekStart={selectedRoutineWeekStart}
+              loading={routineLoading}
+              error={routineError}
+              activeWorkout={activeWorkout}
+              inProgressWorkout={inProgressRoutineWorkout}
+              startingWorkout={routineWorkoutStarting}
+              setPending={pendingSetUpdate}
+              cardioPending={
+                activeWorkout !== null &&
+                pendingCardioSessionId === activeWorkout.id
+              }
+              finishPending={
+                activeWorkout !== null &&
+                pendingFinishSessionId === activeWorkout.id
+              }
+              isOverride={
+                routineResult?.weekStart === selectedRoutineWeekStart &&
+                routineResult.isOverride === true
+              }
+              onStartWorkout={handleStartRoutineWorkout}
+              onResumeWorkout={(sessionId) => setActiveWorkoutId(sessionId)}
+              onSetUpdate={handleRoutineSetUpdate}
+              onCardioUpdate={handleRoutineCardioUpdate}
+              onFinishWorkout={handleFinishRoutineWorkout}
+              onCloseTracker={() => setActiveWorkoutId(null)}
+              onSelectDate={setSelectedRoutineDate}
+              onChangeWeek={(weekOffset) =>
+                setSelectedRoutineDate((current) =>
+                  shiftLocalDate(current, weekOffset * 7),
+                )
+              }
+              onSaveRoutine={saveRoutineWeek}
+              onResetRoutine={resetRoutineWeek}
+            />
 
             <section className="stats-grid" aria-label="Your workout summary">
               <article className="block stat-block">
@@ -906,6 +1258,9 @@ export default function GymTrainerApp() {
                         pending={pendingSessionId === session.id}
                         onToggle={handleToggleSession}
                         onDelete={handleDeleteSession}
+                        onContinue={(sessionToContinue) =>
+                          setActiveWorkoutId(sessionToContinue.id)
+                        }
                       />
                     ))
                   )}

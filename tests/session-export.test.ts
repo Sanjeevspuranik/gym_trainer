@@ -14,8 +14,16 @@ const sessions: WorkoutSession[] = [
     completed: true,
     completedAt: "2026-11-04T10:00:00.000Z",
     createdAt: "2026-11-04T09:00:00.000Z",
+    routine: null,
     exercises: [
-      { name: "Bench press", sets: 3, reps: 8, weightKg: 42.5 },
+      {
+        id: 21,
+        name: "Bench press",
+        sets: 3,
+        reps: 8,
+        weightKg: 42.5,
+        setResults: [],
+      },
     ],
   },
   {
@@ -26,6 +34,7 @@ const sessions: WorkoutSession[] = [
     completed: false,
     completedAt: null,
     createdAt: "2026-11-03T09:00:00.000Z",
+    routine: null,
     exercises: [],
   },
 ];
